@@ -59,7 +59,9 @@ Giao thức sao chép đồng bộ. Việc ghi được coi là hoàn tất khi 
 - Hai thư mục trên mỗi server
 - Cấu  hình hostname cho các server
 - mở port 7788 trên các server.
-- Đăng nhập với tài khoản root
+- Đăng nhập với tài khoản root.
+- Tạo phân vùng trên cả hai server.
+
 
 Cụ thể:
 **Note 1**
@@ -69,6 +71,7 @@ Hostname: cen1
 IP: 192.168.104.128
 Gateway: 192.168.104.1
 Network: 192.168.104.0/24
+Partition: /dev/sda3
 ```
 **Node 2**
 ```
@@ -77,6 +80,7 @@ Hostname: cen2
 IP: 192.168.104.129
 Gateway: 192.168.104.1
 Network: 192.168.104.0/24
+Partition: /dev/sda3
 ```
 
 ### Mô hình
@@ -170,10 +174,114 @@ Giải thích:
 Sao chép file cấu hình sang server 2:
 
 
-https://docs.linbit.com/docs/users-guide-8.4
-https://github.com/hoangdh/ghichep-DRBD/blob/master/Cau-hinh-DRBD-co-ban-tren-CentOS.md
+#### Khởi động trên mỗi node
+- Trên server 1:
+```
+[root@cen1 ~] drbdadm create-md testdata
+```
+- Trên server 2:
+```
+[root@cen2 ~] drbdadm create-md testdata
+```
+- Nếu output như sau là tạo thành công:
+```
+New drbd meta data block successfully created.
+success
+```
+#### Bật DRBD daemon
+Trên cả hai server chạy các lệnh sau để khởi đông và enable dịch vụ drdb:
+```
+systemctl start drbd 
+systemctl enable drbd 
+```
+
+#### Kích hoạt trên node chính.
+
+Cấu hình server cen1 làm node chính (primary) trong mô hình.
+
+```
+[root@cen1 ~] drbdadm primary testdata --force
+```
+Kiểm tra trạng thái:
+
+```
+[root@cen1 ~]# cat /proc/drbd
+version: 8.4.7-1 (api:1/proto:86-101)
+GIT-hash: 3a6a769340ef93b1ba2792c6461250790795db49 build by phil@Build64R7, 2016-01-12 14:29:40
+ 0: cs:Connected ro:Primary/Secondary ds:UpToDate/UpToDate C r-----
+    ns:1048508 nr:0 dw:0 dr:1049236 al:8 bm:0 lo:0 pe:0 ua:0 ap:0 ep:1 wo:f oos:0
+```
+
+Hoặc dùng lệnh:
+
+```
+[root@cen1 ~]# drbd-overview
+ 0:testdata/0  Connected Primary/Secondary UpToDate/UpToDate
+```
+
+**Chú ý**: Chúng ta kiểm tra liên tục bằng lệnh trên và khi nào lệnh trả về kết quả tương tự hoặc có chứa nội dung `Connected Primary/Secondary` thì mới có thể chuyển sang bước 2.6.
+
+#### Tạo mà mount file system DRBD
+
+Tạo một file system và mount, ghi dữ liệu lên nó. Các bước thực hiện trên node chính - node mà bạn đã kích hoạt ở bước 2.5
+
+```
+[root@cen1 ~]# mkfs.ext3 /dev/drbd0
+[root@cen1 ~]# mount /dev/drbd0 /mnt
+[root@cen1 ~]# touch /mnt/testfile
+[root@cen1 ~]# ll /mnt/
+total 16
+drwx------ 2 root root 1384 Oct  12 08:29 lost+found
+-rw-r--r-- 1 root root    0 Oct  12 08:31 testfile
+```
+
+
+#### Test hoạt động replicate trên server 2
+
+Chúng ta chuyển primary node sang cen2 để kiểm tra dữ liệu có được replicate
+
+Unmount file system trên cen1
+
+```
+[root@cen1 ~]# umount /mnt
+```
+
+Chuyển sang chế độ `secondary node` cho cen1
+
+```
+[root@cen1 ~] drbdadm secondary testdata
+```
+
+Trên cen2, chúng ta kích hoạt chế độ primary
+
+```
+[root@cen2 ~] drbdadm primary testdata
+```
+
+Mount và kiểm tra dữ liệu bên trong
+
+```
+[root@cen2 ~]# mount /dev/drbd0 /mnt
+[root@cen2 ~]# ll /mnt/
+total 16
+drwx------ 2 root root 1384 Oct  12 08:29 lost+found
+-rw-r--r-- 1 root root    0 Oct  12 08:31 testfile
+```
+
+Kết quả trên cho ta thấy, dữ liệu đã được replicate sang cen2.
 
 
 
-<https://www.tecmint.com/setup-drbd-storage-replication-on-centos-7/>
+
+
+
+
+
+
+
+Nguồn tham khảo từ:
+- https://github.com/hoangdh/ghichep-DRBD/blob/master/Cau-hinh-DRBD-co-ban-tren-CentOS.md
+- https://docs.linbit.com/docs/users-guide-8.4
+- https://github.com/hoangdh/ghichep-DRBD/blob/master/Cau-hinh-DRBD-co-ban-tren-CentOS.md
+- https://www.tecmint.com/setup-drbd-storage-replication-on-centos-7/
 
